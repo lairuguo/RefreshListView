@@ -59,6 +59,22 @@ public class MainActivity extends Activity {
                     }
                 }, 2000);
             }
+
+            @Override
+            public void onLoadingMore() {
+                new Handler().postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                       List<String> data = new ArrayList();
+                        for (int i = 0; i < 50; i++) {
+                            data.add("更多"+i);
+                        }
+                        mInfos.addAll(data);
+                        mAdapter.notifyDataSetChanged();
+                        lvRefersh.refreshFinish();
+                    }
+                }, 2000);
+            }
         });
     }
 

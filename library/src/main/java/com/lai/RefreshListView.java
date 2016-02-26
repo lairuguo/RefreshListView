@@ -3,7 +3,6 @@ package com.lai;
 import android.animation.Animator;
 import android.animation.ValueAnimator;
 import android.content.Context;
-import android.os.Handler;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -11,6 +10,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.RotateAnimation;
+import android.widget.AbsListView;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.ProgressBar;
@@ -30,18 +30,16 @@ import java.util.Iterator;
  * @更新时间 2016/2/23 19:40
  * @描述 ListView下拉刷新和加载更多
  */
-public class RefreshListView extends ListView {
+public class RefreshListView extends ListView implements AbsListView.OnScrollListener {
     private boolean debug = true;
     private LayoutInflater mInflater;
     private View           mHeaderView;
-    private float          mDownY;
-    private int            mHeaderHeight;
-    private ImageView      mHeaderIvArr;
-    private TextView       mHeaderTvRefresh;
-    private ProgressBar    mHeaderPb;
-    private TextView       mHeaderTvRefreshTime;
-    private Context        mContext;
-    private Handler        mHandler;
+    private float mDownY = -1;
+    private int         mHeaderHeight;
+    private ImageView   mHeaderIvArr;
+    private TextView    mHeaderTvRefresh;
+    private ProgressBar mHeaderPb;
+    private TextView    mHeaderTvRefreshTime;
 
     private static final int STATE_PULL_STATE      = 0;//下拉
     private static final int STATE_RELAESE_REFRESH = 1;//释放
@@ -51,6 +49,9 @@ public class RefreshListView extends ListView {
     private RotateAnimation              mRAnimationUp;
     private RotateAnimation              mRAnimationDown;
     private ArrayList<OnRefreshListener> mListener;
+    private boolean                      isLoadingMore;
+    private View                         mFooterView;
+    private int                          mFooterHeight;
 
     public RefreshListView(Context context) {
         this(context, null);
@@ -58,9 +59,7 @@ public class RefreshListView extends ListView {
 
     public RefreshListView(Context context, AttributeSet attrs) {
         super(context, attrs);
-        mContext = context;
         mInflater = LayoutInflater.from(context);
-        mHandler = new Handler();
         initHeaderView();
         initFooterView();
         initView();
@@ -75,6 +74,7 @@ public class RefreshListView extends ListView {
         mRAnimationDown.setDuration(500);
         mRAnimationDown.setFillAfter(true);
         mListener = new ArrayList<>();
+        this.setOnScrollListener(this);
     }
 
     /**
@@ -87,6 +87,8 @@ public class RefreshListView extends ListView {
         mHeaderPb = (ProgressBar) mHeaderView.findViewById(R.id.header_pb);
         mHeaderTvRefreshTime = (TextView) mHeaderView.findViewById(R.id.header_tv_refresh_time);
         //底部
+        mFooterView.findViewById(R.id.footer_tv_loading);
+
         initViewState();
 
     }
@@ -117,9 +119,13 @@ public class RefreshListView extends ListView {
     }
 
     private void initFooterView() {
-        View footerView = mInflater.inflate(R.layout.refersh_footer_view, null);
-        addFooterView(footerView);
+        mFooterView = mInflater.inflate(R.layout.refersh_footer_view, null);
+        addFooterView(mFooterView);
+        mHeaderView.measure(0, 0);
+        mFooterHeight = mFooterView.getMeasuredHeight();
     }
+
+    private int mHiddenHeight = -1;
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
@@ -133,22 +139,28 @@ public class RefreshListView extends ListView {
                 }
                 float moveY = ev.getRawY();
                 float diffY = moveY - mDownY;
-                // mDownY = moveY;
+                if (mDownY == -1) {
+                    mDownY = moveY;
+                }
+
+                if (mHiddenHeight == -1) {
+                    int[] listViewLocation = new int[2];
+                    this.getLocationOnScreen(listViewLocation);
+                    //获取ListView第一个条目左上角的点
+                    int[] firstItemLocation = new int[2];
+                    this.getChildAt(0).getLocationOnScreen(firstItemLocation);
+                    if (debug) {
+                        Log.d("RefreshListView", "listViewLocation[1]:" + listViewLocation[1]);
+                        Log.d("RefreshListView", "firstItemLocation[1]:" + firstItemLocation[1]);
+                    }
+                    mHiddenHeight = listViewLocation[1] - firstItemLocation[1];
+                }
 
                 //当第0个可见时,拖动时,需要刷新头可见
                 //获取listView左上角的点
-                int[] listViewLocation = new int[2];
-                this.getLocationOnScreen(listViewLocation);
-                //获取ListView第一个条目左上角的点
-                int[] firstItemLocation = new int[2];
-                this.getChildAt(0).getLocationOnScreen(firstItemLocation);
-                if (debug) {
-                    Log.d("RefreshListView", "listViewLocation[1]:" + listViewLocation[1]);
-                    Log.d("RefreshListView", "firstItemLocation[1]:" + firstItemLocation[1]);
-                }
                 int firstVisiblePosition = getFirstVisiblePosition();
                 if (diffY > 0 && firstVisiblePosition == 0) {
-                    int top = (int) (diffY - mHeaderHeight + .5f);
+                    int top = (int) (diffY - mHeaderHeight + .5f) - mHiddenHeight;
                     mHeaderView.setPadding(0, top, 0, 0);
                     if (top >= 0 && mCurrentState != STATE_RELAESE_REFRESH) {
                         if (debug)
@@ -162,14 +174,17 @@ public class RefreshListView extends ListView {
                         refreshUI();
                     }
                     //
-
-                    // mHeaderIvArr.setAnimation(animation);
-
-                    return true;
+                    if (mHiddenHeight == -1) {
+                        return true;
+                    } else {
+                        break;
+                    }
                 }
                 break;
             }
             case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                mHiddenHeight = -1;
                 // 判断是否为要释放刷新的状态
                 if (mCurrentState == STATE_RELAESE_REFRESH) {
                     mCurrentState = STATE_REFRESHING;
@@ -189,6 +204,32 @@ public class RefreshListView extends ListView {
 
     }
 
+    @Override
+    public void onScrollStateChanged(AbsListView view, int scrollState) {
+        if (mCurrentState == STATE_REFRESHING) {
+            return;
+        }
+        if (isLoadingMore) {
+            return;
+        }
+        int position = this.getLastVisiblePosition();
+        int maxIndex = this.getAdapter().getCount() - 1;
+        //判断是否是最后一个
+        if (position == maxIndex) {
+            isLoadingMore = true;
+            //更新UI
+
+            //滑动到最后一个加载更多
+            //暴露接口
+            notifyOnLoadingMore();
+        }
+    }
+
+    @Override
+    public void onScroll(AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {
+
+    }
+
     /**
      * 添加下拉刷新的监听
      *
@@ -201,10 +242,23 @@ public class RefreshListView extends ListView {
         mListener.add(listener);
     }
 
+    public void refreshFinish() {
+        refreshFinish(true);
+    }
+
     /**
      * 刷新结束
      */
-    public void refreshFinish() {
+    public void refreshFinish(boolean hasMore) {
+        if (isLoadingMore) {
+            //加载更多结束
+            isLoadingMore = false;
+            if (!hasMore) {
+                //没有更多
+                mFooterView.setPadding(0, -mFooterHeight, 0, 0);
+            }
+            return;
+        }
         //改变刷新状态
         mCurrentState = STATE_PULL_STATE;
         //更新UI
@@ -231,6 +285,17 @@ public class RefreshListView extends ListView {
         while (iterator.hasNext()) {
             OnRefreshListener listener = iterator.next();
             listener.onRefreshing();
+        }
+    }
+
+    /**
+     * 通知正在刷新
+     */
+    public void notifyOnLoadingMore() {
+        Iterator<OnRefreshListener> iterator = mListener.iterator();
+        while (iterator.hasNext()) {
+            OnRefreshListener listener = iterator.next();
+            listener.onLoadingMore();
         }
     }
 
@@ -315,51 +380,10 @@ public class RefreshListView extends ListView {
          * 正在刷新
          */
         void onRefreshing();
+
+        /**
+         * 加载更多
+         */
+        void onLoadingMore();
     }
-
-    //    /**
-    //     * 下拉头部
-    //     *
-    //     * @param ev
-    //     */
-    //    private void pullHeader(MotionEvent ev) {
-    //
-    //        if (debug) {
-    //            Log.d("RefreshListView", "diffX:" + diffY);
-    //            Log.d("RefreshListView", "mDownX:" + mDownY);
-    //            Log.d("RefreshListView", "moveX:" + moveY);
-    //            Log.d("RefreshListView", "mTop:" + mTop);
-    //            Log.d("RefreshListView", "refresh:" + refresh);
-    //        }
-    //
-    //    }
-
-    //    /**
-    //     * 开始刷新
-    //     */
-    //    private void startRefresh() {
-    //        mHeaderPb.setVisibility(View.VISIBLE);
-    //        mHeaderIvArr.setVisibility(View.INVISIBLE);
-    //        mHandler.postDelayed(new Runnable() {
-    //            @Override
-    //            public void run() {
-    //                initViewState();
-    //                //startBack();
-    //            }
-    //        }, 2000);
-    //    }
-
-    //    /**
-    //     * 刷新动画
-    //     */
-    //    private void startBack() {
-    //        mHandler.postDelayed(new Runnable() {
-    //            @Override
-    //            public void run() {
-    //                while (mTop != -mHeaderHeight)
-    //                    mHeaderView.setPadding(0, mTop--, 0, 0);
-    //            }
-    //        }, 30);
-    //        initViewState();
-    //    }
 }
